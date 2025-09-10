@@ -1,101 +1,976 @@
 ---
-title: "Enrollment Report"
-format: html
-editor: visual
+title: "Quarterly Enrollment Report"
+format: 
+  html:
+    toc: true
+    number-sections: true
+  pdf:
+    fig-width: 8
+    fig-height: 5
+    toc: true
+    number-sections: true
+toc: true
+theme: cosmo
+echo: false
 ---
+
+# Prospects and Suspects (Top of Funnel)
 
 ## Executive Summary
 
-The 2025 Recruitment Cycle has been one of extensive innovation in regards to historic processes in place for GCE. Challenges have included less-than-stellar top of funnel numbers for our graduate programs, with new opportunities that have been capitalized on through a boon in our top of funnel numbers for our Accelerated Bachelor's Degree Completion pr
-
-## Graduate Applications
-
-Graduate Applications continue to lag behind
+No leads currently for 2026
 
 ```{r}
-#| label: Grad Applications
-library(ggplot2)
-library(dplyr)
+#| label: Leads
+#| echo: false
+#| message: false
+#| warning: false
+library(tidyverse)
 library(lubridate)
+library(ggthemes)   # for theme_tufte()
 
-# Load the CSV file
-data <- `GradApps(2024.25).4.4.25`
+# ---- Config ----
+path <- "C:\\Users\\Todd\\Dropbox\\Monthly Export\\2025prospects_suspects.csv"
 
-# Ensure Application.Start.Date is in Date-Time format (MM/DD/YYYY)
-data$Application.Start.Date <- mdy(data$Application.Start.Date)
+# Okabe-Ito palette
+okabe_ito <- c("2023" = "#E69F00",  # orange
+               "2024" = "#56B4E9",  # sky blue
+               "2025" = "#009E73",  # bluish green
+               "2026" = "#F0E442")  # yellow
 
-# Extract month from Application.Start.Date
-data$ApplicationMonth <- month(data$Application.Start.Date, label = TRUE)  
+# ---- Read & normalize columns ----
+df <- readr::read_csv(path, show_col_types = FALSE) |>
+  rename_with(make.names)  # turns spaces/dashes into dots
 
-# Filter for Active.Term values (2024, 2025) and clean up the Year column
-filtered_data <- data %>%
-  filter(grepl("2024|2025", Active.Term...Calculated)) %>%
-  mutate(Year = as.character(ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"))) %>%
-  group_by(Active.Major...Calculated, Year) %>%
-  summarise(count = n(), .groups = "drop")
+# Expect these normalized names based on your export:
+#   Date.of.Inquiry
+#   Active.Major...Calculated
+stopifnot("Date.of.Inquiry" %in% names(df),
+          "Active.Major...Calculated" %in% names(df))
 
-# Ensure Active.Major...Calculated is a character column
-filtered_data$Active.Major...Calculated <- as.character(filtered_data$Active.Major...Calculated)
+# ---- Parse dates & derive time fields ----
+df <- df |>
+  mutate(
+    Date = suppressWarnings(mdy(Date.of.Inquiry)),  # most of your files are m/d/Y
+    # if you ever get NA's from odd rows, uncomment the fallback:
+    # Date = if_else(is.na(Date), ymd(Date.of.Inquiry), Date),
+    Year = year(Date),
+    Month = month(Date, label = TRUE, abbr = TRUE, locale = "C"),
+    Month_Num = month(Date)
+  )
 
-# Create the bar chart
-ggplot(filtered_data, aes(x = Active.Major...Calculated, y = count, fill = Year)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  labs(title = "Active Majors by Active Term (2024 & 2025)",
-       x = "Active Major",
-       y = "Count of Active Terms",
-       fill = "Year") +
-  scale_fill_manual(values = c("2024" = "blue", "2025" = "orange")) +  
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))  # Rotate x labels for readability
+# ---- Filter months & years ----
+df_q1 <- df |>
+  filter(!is.na(Date)) |>
+  filter(Month_Num %in% 1:8) |>
+  filter(Year %in% c(2023, 2024, 2025, 2026))
 
+# ---- Program type bucketing ----
+df_q1 <- df_q1 |>
+  mutate(Program_Type = case_when(
+    str_detect(Active.Major...Calculated, regex("Accelerated Bachelor", ignore_case = TRUE)) ~ "Accelerated",
+    str_detect(Active.Major...Calculated, regex("Master|Graduate Certificate", ignore_case = TRUE)) ~ "Graduate",
+    TRUE ~ "All"
+  ))
 
+# ---- Summarize helper ----
+summarize_leads <- function(d, program_type) {
+  d |>
+    filter(Program_Type == program_type | program_type == "All") |>
+    group_by(Year, Month) |>
+    summarise(Leads = n(), .groups = "drop") |>
+    arrange(Year, Month) |>
+    mutate(
+      Cumulative_Leads = cumsum(Leads),
+      Program_Type = program_type
+    )
+}
 
-  
+# ---- Build summaries ----
+combined_summary <- bind_rows(
+  summarize_leads(df_q1, "All"),
+  summarize_leads(df_q1, "Accelerated"),
+  summarize_leads(df_q1, "Graduate")
+) |>
+  mutate(
+    Program_Type = factor(Program_Type, levels = c("All", "Accelerated", "Graduate")),
+    Year = factor(Year)
+  )
+
+# ---- Plot ----
+ggplot(combined_summary, aes(x = Month, y = Leads, group = Year, color = Year)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ Program_Type, ncol = 1) +
+  labs(
+    title = "Leads by Program Type (Jan–Aug)",
+    y = "Number of Leads", x = "Month", color = "Year"
+  ) +
+  scale_color_manual(values = okabe_ito, drop = FALSE) +
+  theme_tufte(base_size = 12) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(face = "bold")
+  )
 
 
 ```
 
-You can add options to executable code like this
+# Applications
+
+## School of Graduate Studies, Executive Summary
+
+Graduate applications maintain some momentum despite evaporating top of funnel
+
+### Cumulative Applications by Program
 
 ```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+library(stringr)
+
+# Define abbreviation mapping
+all_abbreviations <- c(
+  # Master's
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  
+  # Graduate Certificates
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCMML",
+  "Graduate Certificate in Digital Learning" = "GCDL"
+)
+
+okabe_ito_10 <- c(
+  "#E69F00",  # orange
+  "#56B4E9",  # sky blue
+  "#009E73",  # bluish green
+  "#F0E442",  # yellow
+  "#0072B2",  # blue
+  "#D55E00",  # vermilion
+  "#CC79A7",  # reddish purple
+  "#000000",  # black
+  "#999999",  # medium gray
+  "#999933"   # olive/khaki
+)
+
+
+# Load the CSV file
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Gradapps20242025.csv")
+
+# Clean the data
+data <- data %>%
+  mutate(
+    Application.Start.Date = mdy(Application.Start.Date),
+    Year = year(Application.Start.Date),
+    Month = floor_date(Application.Start.Date, "month"),
+    Major_Short = ifelse(
+      as.character(Active.Major...Calculated) %in% names(all_abbreviations),
+      all_abbreviations[as.character(Active.Major...Calculated)],
+      as.character(Active.Major...Calculated)
+    )
+  ) %>%
+  filter(!is.na(Application.Start.Date))
+
+# Filter for 2025 graduate programs only
+data_filtered <- data %>%
+  filter(
+    grepl("Graduate|Master", Active.Major...Calculated, ignore.case = TRUE) &
+    grepl("2025", Active.Term...Calculated)
+  )
+
+# Aggregate and calculate cumulative counts
+aggregated_data <- data_filtered %>%
+  group_by(Month, Major_Short) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(Month) %>%
+  group_by(Major_Short) %>%
+  mutate(cumulative_count = cumsum(count))
+
+# Create the plot
+ggplot(aggregated_data, aes(x = Month, y = cumulative_count, color = Major_Short, group = Major_Short)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = okabe_ito_10) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b-%Y") +
+  labs(title = "Cumulative Application Starts for Graduate Majors (2025)",
+       x = "Month",
+       y = "Cumulative Applications Started",
+       color = "Major") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### Applications by Program (YoY Comparison, with months )
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-align: center
+#| fig-height: 5
+#| fig-width: 8
+#| out-width: 100%
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(stringr)
+
+# Define abbreviation mapping
+all_abbreviations <- c(
+  # Master's
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  
+  # Graduate Certificates
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCHML",
+  "Graduate Certificate in Digital Learning" = "GCDL"
+)
+
+# Load the CSV file
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Gradapps20242025.csv")
+
+# Convert date field
+data$Application.Start.Date <- mdy(data$Application.Start.Date)
+
+# Extract filtered and labeled data
+filtered_data <- data %>%
+  filter(month(Application.Start.Date) %in% 1:9) %>%
+  filter(grepl("2024|2025", Active.Term...Calculated)) %>%
+  filter(!grepl("Accelerated", Active.Major...Calculated, ignore.case = TRUE)) %>%
+  mutate(
+    Year = ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"),
+    Major_Short = ifelse(
+      as.character(Active.Major...Calculated) %in% names(all_abbreviations),
+      all_abbreviations[as.character(Active.Major...Calculated)],
+      as.character(Active.Major...Calculated)  # fallback in case of mismatch
+    )
+  ) %>%
+  group_by(Major_Short, Year) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Plot using Major_Short for clarity
+ggplot(filtered_data, aes(x = Major_Short, y = count, fill = Year)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Application Starts (Jan-Aug, 2024 & 2025)",
+       x = "Major",
+       y = "Count of Active Terms",
+       fill = "Year") +
+  scale_fill_manual(values = c("2024" = "#E69F00", "2025" = "#56B4E9")) +  # Colorblind-friendly
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+
+```
+
+### Application Submitted by Program, Quarterly Analysis
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-align: center
+#| fig-height: 5
+#| fig-width: 8
+#| out-width: 100%
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(forcats)
+library(ggthemes)
+
+# Abbreviation mapping
+all_abbreviations <- c(
+  # Master's
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  # Graduate Certificates
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCMML",
+  "Graduate Certificate in Digital Learning" = "GCDL",
+  # ADCP
+  "Accelerated Bachelor's in Business Administration"      = "Business Admin",
+  "Accelerated Bachelor's in Business Analytics"           = "Bus. Analytics",
+  "Accelerated Bachelor's in Cybersecurity"                = "Cybersecurity",
+  "Accelerated Bachelor's in Healthcare Management"        = "Healthcare Mgmt",
+  "Accelerated Bachelor's in Human Resources Leadership"   = "HR Leadership",
+  "Accelerated Bachelor's in Information Systems Management" = "Info Sys Mgmt",
+  "Accelerated Bachelor's in Project Management"           = "Project Mgmt",
+  "Accelerated Bachelor's in Supply Chain Management"      = "Supply Chain"
+)
+
+# Load
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Gradapps20242025.csv")
+
+# Parse submit/decision date (robust to time stamps)
+data$Decision.created <- parse_date_time(
+  data$Decision.created,
+  orders = c("mdy HMS","mdy HM","mdy","ymd HMS","ymd HM","ymd"),
+  tz = "UTC",
+  quiet = TRUE
+)
+
+# Filter + label + abbreviate
+filtered_data <- data %>%
+  filter(!is.na(Decision.created), month(Decision.created) %in% 1:8) %>%
+  filter(grepl("2024|2025", Active.Term...Calculated)) %>%
+  # Keep graduate portfolio only (exclude ADCP)
+  filter(!grepl("Accelerated", Active.Major...Calculated, ignore.case = TRUE)) %>%
+  mutate(
+    Year = ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"),
+    Major_Short = ifelse(
+      is.na(Active.Major...Calculated) | Active.Major...Calculated == "",
+      "No Major",
+      ifelse(
+        Active.Major...Calculated %in% names(all_abbreviations),
+        all_abbreviations[Active.Major...Calculated],
+        Active.Major...Calculated
+      )
+    )
+  ) %>%
+  group_by(Major_Short, Year) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Order majors by total across both years (desc)
+order_levels <- filtered_data %>%
+  group_by(Major_Short) %>%
+  summarise(total = sum(count), .groups = "drop") %>%
+  arrange(desc(total)) %>%
+  pull(Major_Short)
+
+filtered_data <- filtered_data %>%
+  mutate(Major_Short = factor(Major_Short, levels = order_levels))
+
+# Plot
+ggplot(filtered_data, aes(x = Major_Short, y = count, fill = Year)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.8) +
+  labs(
+    title = "Graduate Applications Submitted by Active Term (Jan–Aug, 2024 & 2025)",
+    x = "Major",
+    y = "Count of Applications Submitted",
+    fill = "Year"
+  ) +
+  scale_fill_manual(values = c("2024" = "#E69F00", "2025" = "#56B4E9")) +  # Okabe–Ito
+  theme_tufte(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    legend.position = "top",
+    plot.title.position = "plot"
+  )
+
+```
+
+### Application Start Distribution, year over year
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(ggthemes)  # for theme_tufte()
+
+# ---- Load CSV ----
+# (Use your existing file; this will gracefully include 2026 rows if present)
+data <- read_csv("C:/Users/Todd/Dropbox/Monthly Export/Gradapps20242025.csv",
+                 show_col_types = FALSE)
+
+# ---- Parse dates & derive year from Start Term ----
+data <- data %>%
+  mutate(
+    # robust date parsing
+    `Application.Start.Date` = suppressWarnings(mdy(`Application Start Date`)),
+    # pull the first 4-digit year token from Active.Term...Calculated
+    Year = str_extract(`Active Term - Calculated`, "\\b20\\d{2}\\b")
+  ) %>%
+  # keep only target years
+  filter(Year %in% c("2024", "2025", "2026"))
+
+# ---- Optional daily counts (kept in case you need it later) ----
+daily_counts <- data %>%
+  filter(!is.na(`Application.Start.Date`)) %>%
+  group_by(`Application.Start.Date`, Year) %>%
+  summarise(Count = n(), .groups = "drop")
+
+# ---- Okabe–Ito palette ----
+okabe_ito <- c(
+  "2024" = "#E69F00",  # orange
+  "2025" = "#56B4E9",  # sky blue
+  "2026" = "#009E73"   # bluish green (your requested green)
+)
+
+# ---- Plot (histogram over time, monthly-ish bins) ----
+p <- ggplot(
+  data %>% filter(!is.na(`Application.Start.Date`)),
+  aes(x = `Application.Start.Date`, fill = Year)
+) +
+  geom_histogram(binwidth = 30, alpha = 0.7, position = "identity", boundary = as.Date("2024-01-01")) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%m-%y") +
+  scale_fill_manual(values = okabe_ito, breaks = c("2024", "2025", "2026")) +
+  labs(
+    title = "Graduate Application Start Distribution (2024–2026)",
+    x = "Application Start Date",
+    y = "Number of Applications Started",
+    fill = "Start Term Year"
+  ) +
+  theme_tufte(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top",
+    panel.grid.major = element_line(linewidth = 0.2, linetype = "dotted")
+  )
+
+print(p)
+
+
+```
+
+### Cumulative Starts by year and program, small multiples
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+#| out-width: "100%"
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(stringr)
+
+all_abbreviations <- c(
+  # Master's
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  
+  # Graduate Certificates
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCHML",
+  "Graduate Certificate in Digital Learning" = "GCDL",
+  
+  # ADCP
+  "Accelerated Bachelor's in Business Administration" = "Business Admin",
+  "Accelerated Bachelor's in Business Analytics" = "Bus. Analytics",
+  "Accelerated Bachelor's in Cybersecurity" = "Cybersecurity",
+  "Accelerated Bachelor's in Healthcare Management" = "Healthcare Mgmt",
+  "Accelerated Bachelor's in Human Resources Leadership" = "HR Leadership",
+  "Accelerated Bachelor's in Information Systems Management" = "Info Sys Mgmt",
+  "Accelerated Bachelor's in Project Management" = "Project Mgmt",
+  "Accelerated Bachelor's in Supply Chain Management" = "Supply Chain"
+)
+
+data <- read.csv("data/Gradapps242526.csv")
+colnames(data)
+# Clean the data
+data <- data %>%
+  mutate(Application.Start.Date = mdy(Application.Start.Date),  # Convert MM/DD/YYYY to Date format
+         Year = year(Application.Start.Date),  # Extract Year
+         Month = floor_date(Application.Start.Date, "month"),  # Keep Month
+         Active.Major...Calculated = as.factor(Active.Major...Calculated)) %>%
+  filter(!is.na(Application.Completed.Date))  # Remove rows with NA values
+
+
+
+# Check if Active.Term...Calculated exists before using it
+if ("Active.Term...Calculated" %in% colnames(data)) {
+  data <- data %>%
+    mutate(Active.Term.Year = str_extract(as.character(Active.Term...Calculated), "\\d{4}"))  # Extract Year
+} else {
+  stop("Error: 'Active.Term...Calculated' column not found in the dataset.")
+}
+
+# 🔹 Filter for Graduate/Master's programs and select both 2024 & 2025 terms
+data_filtered <- data %>%
+  filter(grepl("Graduate|Master", Active.Major...Calculated, ignore.case = TRUE) &
+           Active.Term.Year %in% c("2024", "2025", "2026"))  # Include both years
+
+# Aggregate data by Month, Major, and Year, then compute cumulative sum
+aggregated_data <- data_filtered %>%
+  group_by(Month, Active.Major...Calculated, Active.Term.Year) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(Month) %>%
+  group_by(Active.Major...Calculated, Active.Term.Year) %>%
+  mutate(cumulative_count = cumsum(count))  # Compute cumulative sum
+
+# program name abbreviations 
+aggregated_data <- aggregated_data %>%
+  mutate(
+    Major_Short = ifelse(
+      as.character(Active.Major...Calculated) %in% names(all_abbreviations),
+      all_abbreviations[as.character(Active.Major...Calculated)],
+      as.character(Active.Major...Calculated)
+    )
+  )
+
+
+
+
+data <- data %>%
+  mutate(
+    Major_Short = ifelse(
+      Active.Major...Calculated %in% names(all_abbreviations),
+      all_abbreviations[as.character(Active.Major...Calculated)],
+      as.character(Active.Major...Calculated)
+    )
+  )
+
+
+# Create the small multiples plot
+plot <- ggplot(aggregated_data, aes(x = Month, y = cumulative_count, 
+                            color = Active.Term.Year, 
+                            group = Active.Term.Year)) +
+  geom_point(size = 2) + 
+  geom_line(size = 1) +
+  scale_color_brewer(palette = "Set2") +  
+  scale_x_date(date_breaks = "6 months", date_labels = "%b-%Y") +  
+  labs(title = "Cumulative Application Starts by Major & Year",
+       x = "Month",
+       y = "Cumulative Applications Started",
+       color = "Application Year") +  # Updated legend title
+  facet_wrap(~ Major_Short, scales = "free_y") +  # Small multiples
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(plot)
+
+```
+
+## Accelerated Degree Completion Program (ADCP), Executive Summary
+
+### Cumulative Applications by Program
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+
+# Read the CSV data
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Accelerated Applicants.csv")  # Replace with your actual CSV file path
+
+# Clean the data
+data <- data %>%
+  mutate(Application.Start.Date = mdy(Application.Start.Date),  # Convert MM/DD/YYYY to Date format
+         Year = year(Application.Start.Date),
+         Month = floor_date(Application.Start.Date, "month"),  # Group by month
+         Active.Major...Calculated = as.factor(Active.Major...Calculated)) %>%
+  filter(!is.na(Application.Start.Date))  # Remove rows with NA values in Application.Start.Date
+
+# 🔹 Ensure you filter by both Major and Entry Term BEFORE aggregation
+data_filtered <- data %>%
+  filter(
+    grepl("2025", Active.Term...Calculated),
+    !grepl("^(Graduate|Master)", Active.Major...Calculated)
+  )  # Change "2025" for other terms as needed
+
+# Aggregate data by Month and Major, then compute cumulative sum
+aggregated_data <- data_filtered %>%
+  group_by(Month, Active.Major...Calculated) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(Month) %>%
+  group_by(Active.Major...Calculated) %>%
+  mutate(cumulative_count = cumsum(count))  # Compute cumulative sum **AFTER filtering**
+
+library(stringr)  # if not already loaded
+
+# Simplify major names
+aggregated_data <- aggregated_data %>%
+  mutate(Major_Short = str_remove(Active.Major...Calculated, "Accelerated Bachelor's in ") %>%
+                        str_remove("Graduate Certificate in "))
+
+# Now use Major_Short for labeling
+ggplot(aggregated_data, aes(x = Month, y = cumulative_count, color = Major_Short, group = Major_Short)) +
+  geom_line(size = 1) +  
+  geom_point(size = 2) +
+  scale_color_manual(values = okabe_ito_10) +   
+  scale_x_date(date_breaks = "3 months", date_labels = "%m-%Y") +  
+  labs(title = "Cumulative Application Starts for ADCP Majors (2025)",
+       x = "Month",
+       y = "Cumulative Applications Started",
+       color = "Concentration") +  # updated legend title
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+### Applications by Program
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+#| out-width: "100%"
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(forcats)
+library(ggthemes)
+
+# Abbreviation mapping
+all_abbreviations <- c(
+  # Master's
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  # Graduate Certificates
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCMML",
+  "Graduate Certificate in Digital Learning" = "GCDL",
+  # ADCP
+  "Accelerated Bachelor's in Business Administration"        = "Business Admin",
+  "Accelerated Bachelor's in Business Analytics"             = "Bus. Analytics",
+  "Accelerated Bachelor's in Cybersecurity"                  = "Cybersecurity",
+  "Accelerated Bachelor's in Healthcare Management"          = "Healthcare Mgmt",
+  "Accelerated Bachelor's in Human Resources Leadership"     = "HR Leadership",
+  "Accelerated Bachelor's in Information Systems Management" = "Info Sys Mgmt",
+  "Accelerated Bachelor's in Project Management"             = "Project Mgmt",
+  "Accelerated Bachelor's in Supply Chain Management"        = "Supply Chain"
+)
+
+# Load
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Accelerated Applicants.csv", stringsAsFactors = FALSE)
+
+# Parse Application.Start.Date (robust to timestamps)
+data$Application.Start.Date <- parse_date_time(
+  data$Application.Start.Date,
+  orders = c("mdy HMS","mdy HM","mdy","ymd HMS","ymd HM","ymd"),
+  tz = "UTC", quiet = TRUE
+)
+
+# Filter + label + abbreviate
+filtered_data <- data %>%
+  filter(!is.na(Application.Start.Date), month(Application.Start.Date) %in% 1:8) %>%
+  filter(str_detect(Active.Term...Calculated, "2024|2025")) %>%
+  # Keep accelerated portfolio only (exclude Graduate/Master)
+  filter(!str_detect(Active.Major...Calculated, regex("Graduate|Master", ignore_case = TRUE))) %>%
+  mutate(
+    Year = if_else(str_detect(Active.Term...Calculated, "2024"), "2024", "2025"),
+    Major_Short = case_when(
+      is.na(Active.Major...Calculated) | Active.Major...Calculated == "" ~ "No Major",
+      Active.Major...Calculated %in% names(all_abbreviations) ~ all_abbreviations[Active.Major...Calculated],
+      TRUE ~ Active.Major...Calculated
+    )
+  ) %>%
+  group_by(Major_Short, Year) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Order majors by total across both years (desc)
+order_levels <- filtered_data %>%
+  group_by(Major_Short) %>%
+  summarise(total = sum(count), .groups = "drop") %>%
+  arrange(desc(total)) %>%
+  pull(Major_Short)
+
+filtered_data <- filtered_data %>%
+  mutate(Major_Short = factor(Major_Short, levels = order_levels))
+
+# Plot
+ggplot(filtered_data, aes(x = Major_Short, y = count, fill = Year)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.8) +
+  labs(
+    title = "Accelerated Applications Started by Active Term (Jan–Aug, 2024 & 2025)",
+    x = "Major",
+    y = "Count of Application Starts",
+    fill = "Year"
+  ) +
+  scale_fill_manual(values = c("2024" = "#E69F00", "2025" = "#56B4E9")) +  # Okabe–Ito
+  theme_tufte(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    legend.position = "top",
+    plot.title.position = "plot"
+  )
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+#| out-width: "100%"
+
+library(tidyverse)
+library(lubridate)
+library(ggthemes)   # theme_tufte()
+
+# ---- Config ----
+path <- "C:\\Users\\Todd\\Dropbox\\Monthly Export\\Accelerated Applicants.csv"
+okabe_ito <- c("2024" = "#E69F00", "2025" = "#56B4E9")
+
+# Abbreviation mapping
+all_abbreviations <- c(
+  "Master's in Applied Analytics" = "MAA",
+  "Master's in Organizational Leadership" = "MOL",
+  "Master's in Healthcare Management and Leadership" = "MML",
+  "Master's in Digital Learning" = "MDL",
+  "Master of Arts in Teaching" = "MAT",
+  "Graduate Certificate in Diversity, Equity, Inclusion and Belonging" = "DEIB",
+  "Graduate Certificate in Organizational Leadership" = "GCOL",
+  "Graduate Certificate in Applied Analytics" = "GCAA",
+  "Graduate Certificate in Healthcare Management and Leadership" = "GCMML",
+  "Graduate Certificate in Digital Learning" = "GCDL",
+  "Accelerated Bachelor's in Business Administration" = "Business Admin",
+  "Accelerated Bachelor's in Business Analytics" = "Bus. Analytics",
+  "Accelerated Bachelor's in Cybersecurity" = "Cybersecurity",
+  "Accelerated Bachelor's in Healthcare Management" = "Healthcare Mgmt",
+  "Accelerated Bachelor's in Human Resources Leadership" = "HR Leadership",
+  "Accelerated Bachelor's in Information Systems Management" = "Info Sys Mgmt",
+  "Accelerated Bachelor's in Project Management" = "Project Mgmt",
+  "Accelerated Bachelor's in Supply Chain Management" = "Supply Chain"
+)
+
+# ---- Read & normalize ----
+dat <- readr::read_csv(path, show_col_types = FALSE) |>
+  rename_with(make.names)
+
+# Required columns after make.names()
+req <- c("Active.Term...Calculated", "Active.Major...Calculated", "Application.Completed.Date")
+missing <- setdiff(req, names(dat))
+if (length(missing) > 0) {
+  stop("Missing required columns: ", paste(missing, collapse = ", "))
+}
+
+# Robust parser that handles m/d/Y, Y-m-d, and ISO with time ('T...Z')
+parse_any <- function(x) {
+  # try m/d/Y
+  d1 <- suppressWarnings(mdy(x))
+  # try plain Y-m-d
+  d2 <- suppressWarnings(ymd(x))
+  # try ISO datetime
+  d3 <- suppressWarnings(ymd_hms(x, quiet = TRUE))
+  out <- coalesce(d1, d2, as_date(d3))
+  as_date(out)
+}
+
+# ---- Parse & filter Jan–Aug by Completed Date ----
+dat <- dat |>
+  mutate(Date_for_Month = parse_any(Application.Completed.Date)) |>
+  filter(!is.na(Date_for_Month)) |>
+  filter(month(Date_for_Month) %in% 1:8)
+
+# ---- Keep 2024/2025 and Accelerated (exclude Graduate/Master) ----
+filtered_data <- dat |>
+  filter(str_detect(Active.Term...Calculated, "2024|2025")) |>
+  filter(!str_detect(Active.Major...Calculated, regex("Graduate|Master", ignore_case = TRUE))) |>
+  mutate(
+    Year = if_else(str_detect(Active.Term...Calculated, "2024"), "2024", "2025"),
+    Major_Short = if_else(
+      as.character(Active.Major...Calculated) %in% names(all_abbreviations),
+      all_abbreviations[as.character(Active.Major...Calculated)],
+      as.character(Active.Major...Calculated)
+    )
+  ) |>
+  group_by(Major_Short, Year) |>
+  summarise(count = n(), .groups = "drop")
+
+if (nrow(filtered_data) == 0) {
+  stop("No rows after filtering. Confirm there are Jan–Aug completed dates and 2024/2025 in Active.Term...Calculated.")
+}
+
+# ---- Order majors by total across years (desc) ----
+order_levels <- filtered_data |>
+  group_by(Major_Short) |>
+  summarise(total = sum(count), .groups = "drop") |>
+  arrange(desc(total)) |>
+  pull(Major_Short)
+
+filtered_data <- filtered_data |>
+  mutate(
+    Major_Short = factor(Major_Short, levels = order_levels),
+    Year = factor(Year, levels = c("2024","2025"))
+  )
+
+# ---- Plot ----
+ggplot(filtered_data, aes(x = Major_Short, y = count, fill = Year)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  labs(
+    title = "Accelerated Applications Completed (Jan–Aug) by Major\n(Source: Application Completed Date)",
+    x = "Major",
+    y = "Count",
+    fill = "Year"
+  ) +
+  scale_fill_manual(values = okabe_ito, drop = FALSE) +
+  theme_tufte(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    legend.position = "top"
+  )
+
+
+
+```
+
+### Application Start Distribution, year over year
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-align: center
+#| fig-height: 5
+#| fig-width: 8
+#| out-width: 100%
+library(readr)
 library(ggplot2)
 library(dplyr)
 library(lubridate)
 
-# Load the CSV file
-data <- Grad.Apps.2024.2025...muhlenberg.files.17387781
+# Load CSV
+data <- read.csv("C:\\Users\\Todd\\Dropbox\\Monthly Export\\Accelerated Applicants.csv")
 
-# Ensure Application.Start.Date is in Date-Time format (MM/DD/YYYY)
-data$Application.Start.Date <- mdy(data$Application.Start.Date)
+# Convert Application Start Date to date format
+data <- data %>%
+  mutate(Application.Start.Date = as.Date(Application.Start.Date, format = "%m/%d/%Y"))
 
-# Extract month from Application.Start.Date
-data$ApplicationMonth <- month(data$Application.Start.Date, label = TRUE)  
-
-# Filter for Active.Term values (2024, 2025) and clean up the Year column
-filtered_data <- data %>%
+# Extract year from Start Term and filter for 2024 or 2025
+data_filtered <- data %>%
   filter(grepl("2024|2025", Active.Term...Calculated)) %>%
-  mutate(Year = as.character(ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"))) %>%
-  group_by(Active.Major...Calculated, Year) %>%
-  summarise(count = n(), .groups = "drop")
+  mutate(Year = ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"))
 
-# Ensure Active.Major...Calculated is a character column
-filtered_data$Active.Major...Calculated <- as.character(filtered_data$Active.Major...Calculated)
+# Aggregate data: count application starts per day for each year
+daily_counts <- data_filtered %>%
+  group_by(Application.Start.Date, Year) %>%
+  summarise(Count = n(), .groups = "drop")
+library(stringr)  # if not already loaded
 
-# Create the bar chart
-ggplot(filtered_data, aes(x = Active.Major...Calculated, y = count, fill = Year)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  labs(title = "Active Majors by Active Term (2024 & 2025)",
-       x = "Active Major",
-       y = "Count of Active Terms",
-       fill = "Year") +
-  scale_fill_manual(values = c("2024" = "blue", "2025" = "orange")) +  
+# Simplify major names
+aggregated_data <- aggregated_data %>%
+  mutate(Major_Short = str_remove(Active.Major...Calculated, "Accelerated Bachelor's in ") %>%
+                        str_remove("Graduate Certificate in "))
+
+plot <- ggplot(data_filtered, aes(x = Application.Start.Date, fill = Year)) +
+  geom_histogram(binwidth = 30, alpha = 0.6, position = "identity") +  # Semi-transparent overlap
+  scale_color_brewer(palette = "Set2") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%m-%y") +  # Show full month and year
+  scale_fill_manual(values = c("2024" = "#E69F00", "2025" = "#56B4E9")) +
+  labs(title = "Application Start Distribution (2024 vs. 2025)",
+       x = "Application Start Date",
+       y = "Number of Applications Started",
+       fill = "Start Term Year") +
+  theme_minimal(base_size=10) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(plot)
+```
+
+### Cumulative Starts by year and program, small multiples
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+#| out-width: "100%"
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(stringr)
+
+data <- read.csv("data/AcceleratedApps.csv")
+
+# Clean the data
+data <- data %>%
+  mutate(Application.Start.Date = mdy(Application.Start.Date),  # Convert MM/DD/YYYY to Date format
+         Year = year(Application.Start.Date),  # Extract Year
+         Month = floor_date(Application.Start.Date, "month"),  # Keep Month
+         Active.Major...Calculated = as.factor(Active.Major...Calculated)) %>%
+  filter(!is.na(Application.Start.Date))  # Remove rows with NA values
+
+# Check if Active.Term...Calculated exists before using it
+if ("Active.Term...Calculated" %in% colnames(data)) {
+  data <- data %>%
+    mutate(Active.Term.Year = str_extract(as.character(Active.Term...Calculated), "\\d{4}"))  # Extract Year
+} else {
+  stop("Error: 'Active.Term...Calculated' column not found in the dataset.")
+}
+
+# 🔹 Filter for Graduate/Master's programs and select both 2024 & 2025 terms
+data_filtered <- data %>%
+  filter(grepl("Accelerated", Active.Major...Calculated, ignore.case = TRUE) &
+           Active.Term.Year %in% c("2024", "2025"))  # Include both years
+
+# Aggregate data by Month, Major, and Year, then compute cumulative sum
+aggregated_data <- data_filtered %>%
+  group_by(Month, Active.Major...Calculated, Active.Term.Year) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(Month) %>%
+  group_by(Active.Major...Calculated, Active.Term.Year) %>%
+  mutate(cumulative_count = cumsum(count))  # Compute cumulative sum
+
+library(stringr)  # if not already loaded
+
+# Simplify major names
+aggregated_data <- aggregated_data %>%
+  mutate(Major_Short = str_remove(Active.Major...Calculated, "Accelerated Bachelor's in ") %>%
+                        str_remove("Graduate Certificate in ") %>% str_remove("Master"))
+
+# Create the small multiples plot
+plot <- ggplot(aggregated_data, aes(x = Month, y = cumulative_count, 
+                            color = Active.Term.Year, 
+                            group = Active.Term.Year)) +
+  geom_point(size = 2) + 
+  geom_line(size = 1) +
+  scale_color_brewer(palette = "Set2") +  
+  scale_x_date(date_breaks = "6 months", date_labels = "%b-%Y") +  
+  labs(title = "Cumulative Application Starts by Major & Year",
+       x = "Month",
+       y = "Cumulative Applications Started",
+       color = "Application Year") +  # Updated legend title
+  facet_wrap(~ Major_Short, scales = "free_y") +  # Small multiples
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))  # Rotate x labels for readability
-
-
-
-  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(plot)
 
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+# Analysis
