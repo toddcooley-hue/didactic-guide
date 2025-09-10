@@ -1,0 +1,101 @@
+---
+title: "Enrollment Report"
+format: html
+editor: visual
+---
+
+## Executive Summary
+
+The 2025 Recruitment Cycle has been one of extensive innovation in regards to historic processes in place for GCE. Challenges have included less-than-stellar top of funnel numbers for our graduate programs, with new opportunities that have been capitalized on through a boon in our top of funnel numbers for our Accelerated Bachelor's Degree Completion pr
+
+## Graduate Applications
+
+Graduate Applications continue to lag behind
+
+```{r}
+#| label: Grad Applications
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Load the CSV file
+data <- `GradApps(2024.25).4.4.25`
+
+# Ensure Application.Start.Date is in Date-Time format (MM/DD/YYYY)
+data$Application.Start.Date <- mdy(data$Application.Start.Date)
+
+# Extract month from Application.Start.Date
+data$ApplicationMonth <- month(data$Application.Start.Date, label = TRUE)  
+
+# Filter for Active.Term values (2024, 2025) and clean up the Year column
+filtered_data <- data %>%
+  filter(grepl("2024|2025", Active.Term...Calculated)) %>%
+  mutate(Year = as.character(ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"))) %>%
+  group_by(Active.Major...Calculated, Year) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Ensure Active.Major...Calculated is a character column
+filtered_data$Active.Major...Calculated <- as.character(filtered_data$Active.Major...Calculated)
+
+# Create the bar chart
+ggplot(filtered_data, aes(x = Active.Major...Calculated, y = count, fill = Year)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Active Majors by Active Term (2024 & 2025)",
+       x = "Active Major",
+       y = "Count of Active Terms",
+       fill = "Year") +
+  scale_fill_manual(values = c("2024" = "blue", "2025" = "orange")) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))  # Rotate x labels for readability
+
+
+
+  
+
+
+```
+
+You can add options to executable code like this
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Load the CSV file
+data <- Grad.Apps.2024.2025...muhlenberg.files.17387781
+
+# Ensure Application.Start.Date is in Date-Time format (MM/DD/YYYY)
+data$Application.Start.Date <- mdy(data$Application.Start.Date)
+
+# Extract month from Application.Start.Date
+data$ApplicationMonth <- month(data$Application.Start.Date, label = TRUE)  
+
+# Filter for Active.Term values (2024, 2025) and clean up the Year column
+filtered_data <- data %>%
+  filter(grepl("2024|2025", Active.Term...Calculated)) %>%
+  mutate(Year = as.character(ifelse(grepl("2024", Active.Term...Calculated), "2024", "2025"))) %>%
+  group_by(Active.Major...Calculated, Year) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Ensure Active.Major...Calculated is a character column
+filtered_data$Active.Major...Calculated <- as.character(filtered_data$Active.Major...Calculated)
+
+# Create the bar chart
+ggplot(filtered_data, aes(x = Active.Major...Calculated, y = count, fill = Year)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Active Majors by Active Term (2024 & 2025)",
+       x = "Active Major",
+       y = "Count of Active Terms",
+       fill = "Year") +
+  scale_fill_manual(values = c("2024" = "blue", "2025" = "orange")) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))  # Rotate x labels for readability
+
+
+
+  
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
