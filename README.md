@@ -1,0 +1,1 @@
+Quarto report operating out of R that showcases a variety of data visualzations for funnel analysis. Includes Graduate and Accelerated Degree Completion Program portfolio. Stages analyzed include Leads, App Starts, App Submits, Admits, and Deposits. 
