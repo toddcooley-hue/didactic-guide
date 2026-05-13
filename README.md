@@ -180,12 +180,9 @@ Planned or possible future improvements include:
 ## Repository Structure
 
 ```text
-├── data/
-├── reports/
-├── scripts/
 ├── quarterly_enrollment_report.qmd
 ├── README.md
-└── output/
+└── Report Screenshots
 ```
 
 ---
