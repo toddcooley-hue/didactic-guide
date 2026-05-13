@@ -66,7 +66,7 @@ Visualizations utilize:
 
 - The **Okabe-Ito color palette** for colorblind accessibility
 - `theme_tufte()` from `ggthemes`
-- Minimalist chart design principles inspired by Edward Tufte
+- Minimalist chart design principles
 - Reduced chart junk and simplified axes/gridlines
 - High-contrast categorical comparison structures
 
